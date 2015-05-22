@@ -8,6 +8,7 @@
 #include <complex.h>
 #include <stdbool.h>
 #include <unistd.h>
+#include <pthread.h>
 
 #include "tsp-types.h"
 #include "tsp-job.h"
@@ -16,7 +17,6 @@
 #include "tsp-tsp.h"
 #include "tsp-lp.h"
 #include "tsp-hkbound.h"
-
 
 /* macro de mesure de temps, retourne une valeur en nanosecondes */
 #define TIME_DIFF(t1, t2) \
@@ -67,6 +67,22 @@ static void generate_tsp_jobs (struct tsp_queue *q, int hops, int len, uint64_t 
 static void usage(const char *name) {
   fprintf (stderr, "Usage: %s [-s] <ncities> <seed> <nthreads>\n", name);
   exit (-1);
+}
+
+void machin(struct tsp_queue * q, tsp_path_t * solution, uint64_t * vpres, long long int * cuts, tsp_path_t * sol, int * sol_len) {
+    int hops = 0, len = 0;
+    get_job (q, *solution, &hops, &len, vpres);
+
+    // le noeud est moins bon que la solution courante
+    if (minimum < INT_MAX
+        && (nb_towns - hops) > 10
+        && ( (lower_bound_using_hk(*solution, hops, len, *vpres)) >= minimum
+	     || (lower_bound_using_lp(*solution, hops, len, *vpres)) >= minimum)
+        )
+
+      return;
+
+    tsp (hops, len, *vpres, *solution, cuts, *sol, sol_len);
 }
 
 int main (int argc, char **argv)
@@ -128,23 +144,27 @@ int main (int argc, char **argv)
     no_more_jobs (&q);
    
     /* calculer chacun des travaux */
+
+    pthread_t boblethread;
+
     tsp_path_t solution;
     memset (solution, -1, MAX_TOWNS * sizeof (int));
     solution[0] = 0;
     while (!empty_queue (&q)) {
-        int hops = 0, len = 0;
-        get_job (&q, solution, &hops, &len, &vpres);
-	
-	// le noeud est moins bon que la solution courante
-	if (minimum < INT_MAX
-	    && (nb_towns - hops) > 10
-	    && ( (lower_bound_using_hk(solution, hops, len, vpres)) >= minimum
-		 || (lower_bound_using_lp(solution, hops, len, vpres)) >= minimum)
-	    )
+        void * statusdelaliberte;
+        // TODO on multithread ici ! distribution des jobs
 
-	  continue;
+        void ** tableaudevoid = void * [6];
+        tableaudevoid[0] = (void *) &q;
+        tableaudevoid[1] = (void *) &solution;
+        tableaudevoid[2] = (void *) &vpres;
+        tableaudevoid[3] = (void *) &cuts;
+        tableaudevoid[4] = (void *) &sol;
+        tableaudevoid[5] = (void *) &sol_len;
 
-	tsp (hops, len, vpres, solution, &cuts, sol, &sol_len);
+        pthread_create(&boblethread, NULL, machin, tableaudevoid);
+        
+        pthread_join(boblethread, &statusdelaliberte); 
     }
     
     clock_gettime (CLOCK_REALTIME, &t2);
