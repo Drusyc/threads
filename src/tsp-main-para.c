@@ -9,6 +9,7 @@
 #include <stdbool.h>
 #include <unistd.h>
 #include <pthread.h>
+#include <semaphore.h>
 
 #include "tsp-types.h"
 #include "tsp-job.h"
@@ -207,6 +208,7 @@ int main (int argc, char **argv)
     pdata->sem = &semu;
 
 
+    /* TODO : mettre en place les sémaphores pour maintenir les nb_threads en vie tout le temps */
     while (!empty_queue (&q)) {
         void * statusdelaliberte;
 
