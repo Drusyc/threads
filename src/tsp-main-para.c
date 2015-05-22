@@ -18,7 +18,6 @@
 #include "tsp-lp.h"
 #include "tsp-hkbound.h"
 
-
 /* macro de mesure de temps, retourne une valeur en nanosecondes */
 #define TIME_DIFF(t1, t2) \
         ((t2.tv_sec - t1.tv_sec) * 1000000000ll + (long long int) (t2.tv_nsec - t1.tv_nsec))
@@ -70,96 +69,165 @@ static void usage(const char *name) {
         exit (-1);
 }
 
+struct pthread_data {
+        struct tsp_queue * q;
+        tsp_path_t * solution;
+        //uint64_t * vpres;
+        long long int * cuts;
+        tsp_path_t * sol;
+        int * sol_len;
+        pthread_mutex_t * mutex;
+        sem_t *sem;
+};
+
+void * machin(void * data) {
+    
+        struct pthread_data * pdata = (struct pthread_data *) data;
+
+        struct tsp_queue * q = pdata->q;
+        tsp_path_t * solution = pdata->solution;
+        //uint64_t * vpres = pdata->vpres; 
+        long long int * cuts = pdata->cuts;
+        tsp_path_t * sol = pdata->sol;
+        int * sol_len = pdata->sol_len;
+
+        int hops = 0, len = 0;
+        uint64_t * vpres = malloc(sizeof(uint64_t));
+        *vpres  = 1;
+
+        pthread_mutex_lock(pdata->mutex);
+        //sem_wait(pdata->sem);
+        get_job (q, *solution, &hops, &len, vpres);
+        //sem_post(pdata->sem);
+        pthread_mutex_unlock(pdata->mutex);
+
+        // le noeud est moins bon que la solution courante
+        if (minimum < INT_MAX
+            && (nb_towns - hops) > 10
+            && ( (lower_bound_using_hk(*solution, hops, len, *vpres)) >= minimum
+                 || (lower_bound_using_lp(*solution, hops, len, *vpres)) >= minimum)
+            ) 
+        {
+                return NULL;
+        }
+
+        pthread_mutex_lock(pdata->mutex);
+        //sem_wait(pdata->sem);
+        tsp (hops, len, *vpres, *solution, cuts, *sol, sol_len);
+        //sem_post(pdata->sem);
+        pthread_mutex_unlock(pdata->mutex);
+        return NULL;
+}
+
 int main (int argc, char **argv)
 {
-        unsigned long long perf;
-        tsp_path_t path;
-        uint64_t vpres=0;
-        tsp_path_t sol;
-        int sol_len;
-        long long int cuts = 0;
-        struct tsp_queue q;
-        struct timespec t1, t2;
+    unsigned long long perf;
+    tsp_path_t path;
+    uint64_t vpres=0;
+    tsp_path_t sol;
+    int sol_len;
+    long long int cuts = 0;
+    struct tsp_queue q;
+    struct timespec t1, t2;
 
-        /* lire les arguments */
-        int opt;
-        while ((opt = getopt(argc, argv, "spq")) != -1) {
-                switch (opt) {
-                        case 's':
-                                affiche_sol = true;
-                                break;
-                        case 'p':
-                                affiche_progress = true;
-                                break;
-                        case 'q':
-                                quiet = true;
-                                break;
-                        default:
-                                usage(argv[0]);
-                                break;
-                }
-        }
+    /* lire les arguments */
+    int opt;
+    while ((opt = getopt(argc, argv, "spq")) != -1) {
+      switch (opt) {
+      case 's':
+	affiche_sol = true;
+	break;
+      case 'p':
+	affiche_progress = true;
+	break;
+      case 'q':
+	quiet = true;
+	break;
+      default:
+	usage(argv[0]);
+	break;
+      }
+    }
 
-        if (optind != argc-3)
-                usage(argv[0]);
+    if (optind != argc-3)
+      usage(argv[0]);
 
-        nb_towns = atoi(argv[optind]);
-        myseed = atol(argv[optind+1]);
-        nb_threads = atoi(argv[optind+2]);
-        assert(nb_towns > 0);
-        assert(nb_threads > 0);
+    nb_towns = atoi(argv[optind]);
+    myseed = atol(argv[optind+1]);
+    nb_threads = atoi(argv[optind+2]);
+    assert(nb_towns > 0);
+    assert(nb_threads > 0);
+   
+    minimum = INT_MAX;
+      
+    /* generer la carte et la matrice de distance */
+    if (! quiet)
+      fprintf (stderr, "ncities = %3d\n", nb_towns);
+    genmap ();
 
-        /* Création de tableau de nbthread pthread_t */ 
-        //pthread_t * tab [nb_threads];
+    init_queue (&q);
 
-        minimum = INT_MAX;
+    clock_gettime (CLOCK_REALTIME, &t1);
 
-        /* generer la carte et la matrice de distance */
-        if (! quiet)
-                fprintf (stderr, "ncities = %3d\n", nb_towns);
-        genmap ();
+    memset (path, -1, MAX_TOWNS * sizeof (int));
+    path[0] = 0;
+    vpres=1;
 
-        init_queue (&q);
+    /* mettre les travaux dans la file d'attente */
+    generate_tsp_jobs (&q, 1, 0, vpres, path, &cuts, sol, & sol_len, 3);
+    no_more_jobs (&q);
+   
+    /* calculer chacun des travaux */ 
 
-        clock_gettime (CLOCK_REALTIME, &t1);
+    tsp_path_t solution;
+    memset (solution, -1, MAX_TOWNS * sizeof (int));
+    solution[0] = 0;
 
-        memset (path, -1, MAX_TOWNS * sizeof (int));
-        path[0] = 0;
-        vpres=1;
 
-        /* mettre les travaux dans la file d'attente */
-        generate_tsp_jobs (&q, 1, 0, vpres, path, &cuts, sol, & sol_len, 3);
-        no_more_jobs (&q);
+    /** Nos petits ajouts **/
 
-        /* calculer chacun des travaux */
-        tsp_path_t solution;
-        memset (solution, -1, MAX_TOWNS * sizeof (int));
-        solution[0] = 0;
-        while (!empty_queue (&q)) {
-                int hops = 0, len = 0;
-                get_job (&q, solution, &hops, &len, &vpres);
+    pthread_t boblethread;
+    struct pthread_data * pdata = malloc(sizeof(struct pthread_data));
 
-                // le noeud est moins bon que la solution courante
-                if (minimum < INT_MAX
-                                && (nb_towns - hops) > 10
-                                && ( (lower_bound_using_hk(solution, hops, len, vpres)) >= minimum
-                                        || (lower_bound_using_lp(solution, hops, len, vpres)) >= minimum)
-                   )
+    /* Mutex */
+    pthread_mutex_t mumu;
+    pthread_mutex_init(&mumu,NULL);
 
-                        continue;
+    /* Semaphore de nbthread */
+    sem_t semu;
+    sem_init(&semu, 0, nb_threads);
 
-                tsp (hops, len, vpres, solution, &cuts, sol, &sol_len);
-        }
+    pdata->q = &q;
+    pdata->solution = &solution;
+    //pdata->vpres   = &vpres;
+    pdata->cuts = &cuts;
+    pdata->sol = &sol;
+    pdata->sol_len = &sol_len;
+    pdata->mutex = &mumu;
+    pdata->sem = &semu;
 
-        clock_gettime (CLOCK_REALTIME, &t2);
 
-        if (affiche_sol)
-                print_solution_svg (sol, sol_len);
+    while (!empty_queue (&q)) {
+        void * statusdelaliberte;
 
-        perf = TIME_DIFF (t1,t2);
-        printf("<!-- # = %d seed = %ld len = %d threads = %d time = %lld.%03lld ms ( %lld coupures ) -->\n",
-                        nb_towns, myseed, sol_len, nb_threads,
-                        perf/1000000ll, perf%1000000ll, cuts);
+        pthread_create(&boblethread, NULL, machin, (void *) pdata);
+        pthread_join(boblethread, &statusdelaliberte); 
+        
+    }
 
-        return 0 ;
+    sem_destroy(&semu);
+    pthread_mutex_destroy(&mumu);
+    free(pdata);
+    
+    clock_gettime (CLOCK_REALTIME, &t2);
+
+    if (affiche_sol)
+      print_solution_svg (sol, sol_len);
+
+    perf = TIME_DIFF (t1,t2);
+    printf("<!-- # = %d seed = %ld len = %d threads = %d time = %lld.%03lld ms ( %lld coupures ) -->\n",
+	   nb_towns, myseed, sol_len, nb_threads,
+	   perf/1000000ll, perf%1000000ll, cuts);
+
+    return 0 ;
 }
