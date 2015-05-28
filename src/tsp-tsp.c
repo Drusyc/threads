@@ -62,13 +62,18 @@ void tsp (int hops, int len, uint64_t vpres, tsp_path_t path, long long int *cut
 	    int dist = tsp_distance[me][0]; // retourner en 0
             if ( len + dist < local_min ) {
                 pthread_mutex_lock(mutex_min);
-		        minimum = len + dist;
-		        *sol_len = len + dist;
-		        memcpy(sol, path, nb_towns*sizeof(int));
-		        if (!quiet) {
-		            print_solution (path, len+dist);
-                }
+                local_min = minimum; 
                 pthread_mutex_unlock(mutex_min);
+                if (len + dist < local_min) {
+                        pthread_mutex_lock(mutex_min);
+                        minimum = len + dist;
+                        *sol_len = len + dist;
+                        memcpy(sol, path, nb_towns*sizeof(int));
+                        if (!quiet) {
+                            print_solution (path, len+dist);
+                        }
+                        pthread_mutex_unlock(mutex_min);
+                }
 	    }
     } else {
         int me = path [hops - 1];        
