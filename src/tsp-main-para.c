@@ -43,9 +43,10 @@ bool quiet=false;
 
 
 /* mutex */
-static pthread_mutex_t mutex_jobs; /* mutex pour exclusion mutuelle pour la liste des jobs */
-static pthread_mutex_t mutex_cuts; /* mutex pour exclusion mutuelle pour le nombre de coupes */
-static pthread_mutex_t mutex_min;  /* mutex pour exclusion mutuelle pour la solution minimum */ /* tsp-tsp.h: extern int minimum */
+static pthread_mutex_t mutex_jobs;      /* mutex pour exclusion mutuelle pour la liste des jobs */
+static pthread_mutex_t mutex_cuts;      /* mutex pour exclusion mutuelle pour le nombre de coupes */
+static pthread_mutex_t mutex_min;       /* mutex pour exclusion mutuelle pour la solution minimum */ /* tsp-tsp.h: extern int minimum */
+static pthread_mutex_t mutex_printf;    /* mutex pour exclusion mutuelle pour la sortie  */
 
 static void generate_tsp_jobs (struct tsp_queue *q, int hops, int len, uint64_t vpres, tsp_path_t path, long long int *cuts, tsp_path_t sol, int *sol_len, int depth)
 {
@@ -78,7 +79,6 @@ static void usage(const char *name) {
 
 struct pthread_data {
         struct tsp_queue * q;
-        tsp_path_t * solution;
         //uint64_t * vpres;
         long long int * cuts;
         tsp_path_t * sol;
@@ -101,12 +101,17 @@ void * machin(void * data) {
         struct pthread_data * pdata = (struct pthread_data *) data;
 
         struct tsp_queue * q = pdata->q;
-        tsp_path_t * solution = pdata->solution;
+        
+        tsp_path_t solution;
+        memset(solution, -1, MAX_TOWNS * sizeof (int));
+        solution[0] = 0;
+
         long long int * cuts = pdata->cuts;
         tsp_path_t * sol = pdata->sol;
         int * sol_len = pdata->sol_len;
 
         uint64_t * vpres = malloc(sizeof(uint64_t));
+
 
         pthread_mutex_lock(&mutex_jobs);
         bool is_q_empty = empty_queue(q);
@@ -115,9 +120,12 @@ void * machin(void * data) {
                 int hops = 0, len = 0;
                 *vpres  = 1;
 
-                pthread_mutex_lock(&mutex_jobs);
-                get_job (q, *solution, &hops, &len, vpres);
-                pthread_mutex_unlock(&mutex_jobs);
+                if (!get_job (q, solution, &hops, &len, vpres, &mutex_jobs, &mutex_printf)){
+                        break;
+                }
+
+                int lower_hk = lower_bound_using_hk(solution, hops, len, *vpres);
+                int lower_lp = lower_bound_using_lp(solution, hops, len, *vpres);
 
                 pthread_mutex_lock(&mutex_min);
                 int local_min = minimum;
@@ -132,14 +140,11 @@ void * machin(void * data) {
                 // le noeud est moins bon que la solution courante
                 if (local_min < INT_MAX
                     && (nb_towns - hops) > 10
-                    && ( (lower_bound_using_hk(*solution, hops, len, *vpres)) >= local_min 
-                         || (lower_bound_using_lp(*solution, hops, len, *vpres)) >= local_min)
-                    ) 
-                {
+                    && ( lower_hk >= local_min || lower_lp >= local_min)) {
                         continue;
                 }
                 
-                tsp (hops, len, *vpres, *solution, cuts, *sol, sol_len, &mutex_cuts, &mutex_min);
+                tsp (hops, len, *vpres, solution, cuts, *sol, sol_len, &mutex_cuts, &mutex_min, &mutex_printf);
 
                 pthread_mutex_lock(&mutex_jobs);
                 is_q_empty = empty_queue(q);
@@ -208,12 +213,6 @@ int main (int argc, char **argv)
     generate_tsp_jobs (&q, 1, 0, vpres, path, &cuts, sol, & sol_len, 3);
     no_more_jobs (&q);
    
-    /* calculer chacun des travaux */ 
-
-    tsp_path_t solution;
-    memset (solution, -1, MAX_TOWNS * sizeof (int));
-    solution[0] = 0;
-
 
     /** Nos petits ajouts **/
 
@@ -221,6 +220,7 @@ int main (int argc, char **argv)
     pthread_mutex_init(&mutex_jobs, NULL);
     pthread_mutex_init(&mutex_cuts, NULL);
     pthread_mutex_init(&mutex_min, NULL);
+    pthread_mutex_init(&mutex_printf, NULL);
 
     pthread_t * table_threads = malloc(nb_threads * sizeof(pthread_t));
     struct pthread_data * table_data = malloc(nb_threads * sizeof(struct pthread_data));
@@ -255,7 +255,7 @@ int main (int argc, char **argv)
     for (uint8_t i = 0; i < nb_threads; i++) {
          
        table_data[i].q = &q;
-       table_data[i].solution = &solution;
+       //table_data[i].solution = &solution;
        table_data[i].cuts = &cuts;
        table_data[i].sol = &sol;
        table_data[i].sol_len = &sol_len;
@@ -277,6 +277,8 @@ int main (int argc, char **argv)
     pthread_mutex_destroy(&mutex_jobs);
     pthread_mutex_destroy(&mutex_cuts);
     pthread_mutex_destroy(&mutex_min);
+    pthread_mutex_destroy(&mutex_printf);
+
     
 
     clock_gettime (CLOCK_REALTIME, &t2);

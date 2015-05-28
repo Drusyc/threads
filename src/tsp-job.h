@@ -3,6 +3,7 @@
 /* gestion des files de jobs */
 
 #include <stdint.h>
+#include <pthread.h>
 
 /* Structure pour la tête de file */
 struct tsp_queue {
@@ -21,7 +22,7 @@ extern void add_job (struct tsp_queue *q, tsp_path_t p, int hops, int len, uint6
 
 /* Enlève un job de la file [q], le stocke dans [p], [hops] et [len]. Peut retourner 0 si la file
  * est temporairement vide. */
-extern int get_job (struct tsp_queue *q, tsp_path_t p, int *hops, int *len, uint64_t *vpres) ;
+extern int get_job (struct tsp_queue *q, tsp_path_t p, int *hops, int *len, uint64_t *vpres, pthread_mutex_t *mutex_job, pthread_mutex_t *mutex_printf) ;
 
 /* Enregistre qu'il n'y aura plus de jobs ajoutés à la file. */
 extern void no_more_jobs (struct tsp_queue *q) ;

@@ -56,10 +56,12 @@ void add_job (struct tsp_queue *q, tsp_path_t p, int hops, int len, uint64_t vpr
    q->nb ++;
 }
 
-int get_job (struct tsp_queue *q, tsp_path_t p, int *hops, int *len, uint64_t *vpres) {
+int get_job (struct tsp_queue *q, tsp_path_t p, int *hops, int *len, uint64_t *vpres, pthread_mutex_t *mutex_jobs, pthread_mutex_t *mutex_printf) {
    struct tsp_cell *ptr;
    
+   pthread_mutex_lock(mutex_jobs);
    if (q->first == 0) {
+       pthread_mutex_unlock(mutex_jobs);
        return 0;
    }
    
@@ -69,17 +71,23 @@ int get_job (struct tsp_queue *q, tsp_path_t p, int *hops, int *len, uint64_t *v
    if (q->first == 0) {
        q->last = 0;
    }
+   q->nb --;
+   pthread_mutex_unlock(mutex_jobs);
+
+   if (affiche_progress) {
+     pthread_mutex_lock(mutex_printf);
+     printf("<!- %d / %d %% ->\n",q->nb, q->nbmax);
+     pthread_mutex_unlock(mutex_printf);
+   }
+
 
    *len = ptr->tsp_job.len;
    *hops = ptr->tsp_job.hops;
    *vpres = ptr->tsp_job.vpres;
    memcpy (p, ptr->tsp_job.path, *hops * sizeof(p[0]));
 
-   free (ptr);
 
-   q->nb --;
-   if (affiche_progress)
-     printf("<!- %d / %d %% ->\n",q->nb, q->nbmax);
+   free (ptr);
 
    return 1;
 } 
