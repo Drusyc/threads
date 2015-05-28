@@ -22,17 +22,26 @@ int present (int city, int hops, tsp_path_t path, uint64_t vpres)
 
 
 
-void tsp (int hops, int len, uint64_t vpres, tsp_path_t path, long long int *cuts, tsp_path_t sol, int *sol_len)
+void tsp (int hops, int len, uint64_t vpres, tsp_path_t path, long long int *cuts, tsp_path_t sol, int *sol_len , pthread_mutex_t *mutex_cut, pthread_mutex_t *mutex_min)
 {
-    if (len + cutprefix[(nb_towns-hops)] >= minimum) {
+    pthread_mutex_lock(mutex_min);
+    int local_min = minimum;
+    pthread_mutex_unlock(mutex_min);
+
+
+    if (len + cutprefix[(nb_towns-hops)] >= local_min) {
+      pthread_mutex_lock(mutex_cut);
       (*cuts)++ ;
+      pthread_mutex_unlock(mutex_cut);
       return;
     }
 
     /* calcul de l'arbre couvrant comme borne inférieure */
     if ((nb_towns - hops) > 6 &&
-	lower_bound_using_hk(path, hops, len, vpres) >= minimum) {
-      (*cuts)++;
+	lower_bound_using_hk(path, hops, len, vpres) >= local_min) {
+      pthread_mutex_lock(mutex_cut);
+      (*cuts)++ ;
+      pthread_mutex_unlock(mutex_cut);
       return;
     }
 
@@ -40,8 +49,10 @@ void tsp (int hops, int len, uint64_t vpres, tsp_path_t path, long long int *cut
     /* un rayon de coupure à 15, pour ne pas lancer la programmation
        linéaire pour les petits arbres, plus rapide à calculer sans */
     if ((nb_towns - hops) > 22
-	&& lower_bound_using_lp(path, hops, len, vpres) >= minimum) {
-      (*cuts)++;
+	&& lower_bound_using_lp(path, hops, len, vpres) >= local_min) {
+      pthread_mutex_lock(mutex_cut);
+      (*cuts)++ ;
+      pthread_mutex_unlock(mutex_cut);
       return;
     }
 
@@ -49,12 +60,14 @@ void tsp (int hops, int len, uint64_t vpres, tsp_path_t path, long long int *cut
     if (hops == nb_towns) {
 	    int me = path [hops - 1];
 	    int dist = tsp_distance[me][0]; // retourner en 0
-            if ( len + dist < minimum ) {
+            if ( len + dist < local_min ) {
+                    pthread_mutex_lock(mutex_min);
 		    minimum = len + dist;
 		    *sol_len = len + dist;
 		    memcpy(sol, path, nb_towns*sizeof(int));
 		    if (!quiet)
 		      print_solution (path, len+dist);
+                    pthread_mutex_unlock(mutex_min);
 	    }
     } else {
         int me = path [hops - 1];        
@@ -63,7 +76,7 @@ void tsp (int hops, int len, uint64_t vpres, tsp_path_t path, long long int *cut
                 path[hops] = i;
 		vpres |= (1<<i);
                 int dist = tsp_distance[me][i];
-                tsp (hops + 1, len + dist, vpres, path, cuts, sol, sol_len);
+                tsp (hops + 1, len + dist, vpres, path, cuts, sol, sol_len, mutex_cut, mutex_min);
 		vpres &= (~(1<<i));
             }
         }
